@@ -1,9 +1,5 @@
 # EV Charging Optimization with Dynamic Electricity Pricing
 
-[![Python 3.10+](https://img.shields.io/badge/python-3.10+-blue.svg)](https://www.python.org/downloads/)
-[![Code style: black](https://img.shields.io/badge/code%20style-black-000000.svg)](https://github.com/psf/black)
-[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
-
 ## 📋 Overview
 
 A production-grade machine learning system that forecasts 72-hour electricity prices and optimizes EV charging schedules to minimize costs. Built with real German wholesale electricity market data (2015-2024), this project demonstrates end-to-end ML engineering from data acquisition to optimization deployment.

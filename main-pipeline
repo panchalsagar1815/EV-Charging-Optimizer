@@ -9,8 +9,6 @@ Usage:
     python main.py --config configs/config.yaml --mode forecast
     python main.py --config configs/config.yaml --mode optimize
 
-Author: [Your Name]
-Date: 2025-11-03
 """
 
 import argparse

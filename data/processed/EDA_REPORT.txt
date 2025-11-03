@@ -1,0 +1,51 @@
+
+KEY FINDINGS:
+=============
+
+1. PRICE CHARACTERISTICS
+   - Mean: €72.58/MWh
+   - Range: €-316.40 to €867.85
+   - Volatility (CV): 1.112
+   - Distribution: Right-skewed
+
+2. HOURLY PATTERNS
+   - Peak hour: 17:00 (€101.51)
+   - Off-peak: 12:00 (€56.47)
+   - Difference: €45.04
+
+3. WEEKLY PATTERNS
+   - Weekday avg: €78.90/MWh
+   - Weekend avg: €56.79/MWh
+   - Difference: €22.11
+
+4. SEASONAL PATTERNS
+   - Cheapest month: May (€56.21)
+   - Most expensive: Aug (€91.71)
+   - Seasonality strength: €35.50
+
+5. STATIONARITY
+   - ADF p-value: 0.000000 (Stationary)
+   - Time series shows strong daily patterns
+
+6. OUTLIERS
+   - IQR method: 7297 outliers (7.70%)
+   - Extreme low: €-316.40 (charging opportunity!)
+   - Extreme high: €867.85 (avoid charging)
+
+7. EV CHARGING OPTIMIZATION OPPORTUNITY
+   - Negative price hours: 2214 (2.33%)
+   - Potential annual savings: €-1961.30 (60 kWh EV)
+   - Best months: 5 (renewable surplus season)
+
+RECOMMENDATIONS FOR FORECASTING:
+=================================
+✓ Use ARIMA/SARIMA (captured seasonal patterns)
+✓ Try XGBoost/LightGBM (handles hourly patterns well)
+✓ Feature engineer: hour, day_of_week, month, holidays
+✓ Handle outliers: keep for training (they're real market events)
+✓ 72-hour forecast window: sufficient for EV optimization
+✓ Focus prediction on high-variance hours (17:00)
+
+NEXT STEPS:
+===========
+→ Run 03_feature_engineering.ipynb

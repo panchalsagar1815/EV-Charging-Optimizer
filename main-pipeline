@@ -1,0 +1,378 @@
+"""
+Main Pipeline - EV Charging Optimizer
+======================================
+
+End-to-end pipeline for electricity price forecasting and EV charging optimization.
+
+Usage:
+    python main.py --config configs/config.yaml
+    python main.py --config configs/config.yaml --mode forecast
+    python main.py --config configs/config.yaml --mode optimize
+
+Author: [Your Name]
+Date: 2025-11-03
+"""
+
+import argparse
+import sys
+from pathlib import Path
+from typing import Dict, Any
+import yaml
+from loguru import logger
+import pandas as pd
+import numpy as np
+
+# Add src to path
+sys.path.append(str(Path(__file__).parent))
+
+from src.data.data_loader import DataLoader
+from src.data.preprocessor import Preprocessor
+from src.features.feature_engineer import FeatureEngineer
+from src.models.lgbm_forecaster import LightGBMForecaster
+from src.models.xgb_forecaster import XGBoostForecaster
+from src.optimization.advanced_optimizer import AdvancedOptimizer
+from src.utils.config import Config
+from src.utils.metrics import calculate_metrics, print_metrics
+from src.utils.logger import setup_logger
+
+
+def load_config(config_path: str) -> Dict[str, Any]:
+    """Load YAML configuration file."""
+    with open(config_path, 'r') as f:
+        config = yaml.safe_load(f)
+    return config
+
+
+def run_data_pipeline(config: Config) -> pd.DataFrame:
+    """
+    Run data acquisition and preprocessing pipeline.
+    
+    Args:
+        config: Configuration object
+        
+    Returns:
+        Preprocessed dataframe
+    """
+    logger.info("=" * 70)
+    logger.info("STEP 1: DATA PIPELINE")
+    logger.info("=" * 70)
+    
+    # Load raw data
+    logger.info("Loading raw data...")
+    loader = DataLoader(config)
+    df_raw = loader.load_ember_data()
+    logger.info(f"✓ Loaded {len(df_raw)} records")
+    
+    # Preprocess
+    logger.info("Preprocessing data...")
+    preprocessor = Preprocessor(config)
+    df_clean = preprocessor.clean_data(df_raw)
+    logger.info(f"✓ Cleaned data: {len(df_clean)} records")
+    
+    # Validate
+    validation_report = preprocessor.validate_data(df_clean)
+    logger.info(f"✓ Validation passed: {validation_report['passed']}")
+    
+    return df_clean
+
+
+def run_feature_engineering(df: pd.DataFrame, config: Config) -> pd.DataFrame:
+    """
+    Run feature engineering pipeline.
+    
+    Args:
+        df: Cleaned dataframe
+        config: Configuration object
+        
+    Returns:
+        Feature-engineered dataframe
+    """
+    logger.info("\n" + "=" * 70)
+    logger.info("STEP 2: FEATURE ENGINEERING")
+    logger.info("=" * 70)
+    
+    engineer = FeatureEngineer(config)
+    
+    # Create all features
+    logger.info("Creating lag features...")
+    df = engineer.create_lag_features(df)
+    
+    logger.info("Creating rolling statistics...")
+    df = engineer.create_rolling_features(df)
+    
+    logger.info("Creating cyclical features...")
+    df = engineer.create_cyclical_features(df)
+    
+    logger.info("Creating derived features...")
+    df = engineer.create_derived_features(df)
+    
+    # Handle missing values
+    logger.info("Handling missing values...")
+    df = engineer.handle_missing_values(df)
+    
+    logger.info(f"✓ Feature engineering complete: {len(df.columns)} features")
+    
+    # Save
+    output_path = Path(config.get('data.processed_path'))
+    df.to_csv(output_path, index=False)
+    logger.info(f"✓ Saved: {output_path}")
+    
+    return df
+
+
+def run_model_training(df: pd.DataFrame, config: Config) -> Dict[str, Any]:
+    """
+    Train and evaluate forecasting models.
+    
+    Args:
+        df: Feature-engineered dataframe
+        config: Configuration object
+        
+    Returns:
+        Dictionary with trained models and metrics
+    """
+    logger.info("\n" + "=" * 70)
+    logger.info("STEP 3: MODEL TRAINING")
+    logger.info("=" * 70)
+    
+    # Prepare data
+    target_col = 'price_eur_mwh'
+    feature_cols = [c for c in df.columns if c not in [target_col, 'timestamp']]
+    
+    # Train/val/test split
+    train_ratio = config.get('split.train_ratio')
+    val_ratio = config.get('split.val_ratio')
+    
+    split1 = int(len(df) * train_ratio)
+    split2 = int(len(df) * (train_ratio + val_ratio))
+    
+    X_train = df[feature_cols].iloc[:split1]
+    y_train = df[target_col].iloc[:split1]
+    
+    X_val = df[feature_cols].iloc[split1:split2]
+    y_val = df[target_col].iloc[split1:split2]
+    
+    X_test = df[feature_cols].iloc[split2:]
+    y_test = df[target_col].iloc[split2:]
+    
+    logger.info(f"Train: {len(X_train)}, Val: {len(X_val)}, Test: {len(X_test)}")
+    
+    # Train LightGBM
+    logger.info("\nTraining LightGBM...")
+    lgbm_model = LightGBMForecaster(config)
+    lgbm_model.train(X_train, y_train, X_val, y_val)
+    
+    # Evaluate on test set
+    y_pred_lgbm = lgbm_model.predict(X_test)
+    metrics_lgbm = calculate_metrics(y_test, y_pred_lgbm)
+    
+    logger.info("LightGBM Test Metrics:")
+    print_metrics(metrics_lgbm)
+    
+    # Save model
+    model_path = Path(config.get('paths.models')) / 'lightgbm_model.pkl'
+    lgbm_model.save(str(model_path))
+    logger.info(f"✓ Saved: {model_path}")
+    
+    # Train XGBoost
+    logger.info("\nTraining XGBoost...")
+    xgb_model = XGBoostForecaster(config)
+    xgb_model.train(X_train, y_train, X_val, y_val)
+    
+    y_pred_xgb = xgb_model.predict(X_test)
+    metrics_xgb = calculate_metrics(y_test, y_pred_xgb)
+    
+    logger.info("XGBoost Test Metrics:")
+    print_metrics(metrics_xgb)
+    
+    model_path = Path(config.get('paths.models')) / 'xgboost_model.pkl'
+    xgb_model.save(str(model_path))
+    logger.info(f"✓ Saved: {model_path}")
+    
+    # Select best model
+    best_model_name = 'lightgbm' if metrics_lgbm['mae'] < metrics_xgb['mae'] else 'xgboost'
+    best_model = lgbm_model if best_model_name == 'lightgbm' else xgb_model
+    
+    logger.info(f"\n✓ Best model: {best_model_name.upper()} (MAE: {min(metrics_lgbm['mae'], metrics_xgb['mae']):.2f})")
+    
+    return {
+        'lightgbm': {'model': lgbm_model, 'metrics': metrics_lgbm},
+        'xgboost': {'model': xgb_model, 'metrics': metrics_xgb},
+        'best_model': best_model,
+        'best_model_name': best_model_name,
+        'test_data': {'X': X_test, 'y': y_test}
+    }
+
+
+def run_optimization(model, test_data: pd.DataFrame, config: Config) -> Dict[str, Any]:
+    """
+    Run EV charging optimization.
+    
+    Args:
+        model: Trained forecasting model
+        test_data: Test dataset
+        config: Configuration object
+        
+    Returns:
+        Optimization results
+    """
+    logger.info("\n" + "=" * 70)
+    logger.info("STEP 4: CHARGING OPTIMIZATION")
+    logger.info("=" * 70)
+    
+    # Get 72-hour price forecast from test set
+    forecast_horizon = config.get('optimization_advanced.forecast_horizon_hours')
+    X_test = test_data['X']
+    y_test = test_data['y']
+    
+    # Predict
+    price_forecast = model.predict(X_test.iloc[:forecast_horizon])
+    logger.info(f"✓ Generated {len(price_forecast)}-hour price forecast")
+    
+    # Initialize optimizer
+    optimizer = AdvancedOptimizer(
+        battery_kwh=config.get('ev.battery_kwh'),
+        initial_soc=config.get('ev.initial_soc'),
+        target_soc=config.get('ev.target_soc'),
+        min_soc=config.get('ev.min_soc'),
+        charge_power_kw=config.get('ev.charge_power_kw'),
+        efficiency=config.get('ev.efficiency'),
+        battery_cost_eur=config.get('battery.replacement_cost_eur'),
+        battery_cycle_life=config.get('battery.cycle_life'),
+        max_daily_charge_kwh=config.get('optimization_advanced.max_daily_charge_kwh'),
+        prefer_offpeak=config.get('optimization_advanced.prefer_offpeak'),
+        enable_v2g=config.get('optimization_advanced.enable_v2g')
+    )
+    
+    # Optimize
+    logger.info("Running optimization...")
+    results = optimizer.optimize(price_forecast)
+    
+    # Display results
+    logger.info("\n" + "=" * 70)
+    logger.info("OPTIMIZATION RESULTS")
+    logger.info("=" * 70)
+    logger.info(f"Total cost (optimized):        €{results['total_cost']:.2f}")
+    logger.info(f"Baseline cost (flat):          €{results['baseline_cost']:.2f}")
+    logger.info(f"Cost savings:                  €{results['savings']:.2f} ({results['savings_pct']:.1f}%)")
+    logger.info(f"Total energy charged:          {results['total_charged_kwh']:.2f} kWh")
+    logger.info(f"Final SoC:                     {results['final_soc']:.1%}")
+    logger.info(f"Hours with charging:           {results['charging_hours']}")
+    logger.info(f"Peak hours avoided:            {results['peak_hours_avoided']}")
+    
+    # Save schedule
+    schedule_path = Path(config.get('paths.data_processed')) / 'optimized_schedule.csv'
+    results['schedule'].to_csv(schedule_path, index=False)
+    logger.info(f"\n✓ Saved schedule: {schedule_path}")
+    
+    return results
+
+
+def main():
+    """Main pipeline execution."""
+    
+    # Parse arguments
+    parser = argparse.ArgumentParser(description='EV Charging Optimizer Pipeline')
+    parser.add_argument('--config', type=str, default='configs/config.yaml',
+                       help='Path to configuration file')
+    parser.add_argument('--mode', type=str, default='full',
+                       choices=['full', 'data', 'features', 'train', 'optimize'],
+                       help='Pipeline mode')
+    parser.add_argument('--log-level', type=str, default='INFO',
+                       choices=['DEBUG', 'INFO', 'WARNING', 'ERROR'],
+                       help='Logging level')
+    
+    args = parser.parse_args()
+    
+    # Load configuration
+    config_dict = load_config(args.config)
+    config = Config(config_dict)
+    
+    # Setup logging
+    setup_logger(config, level=args.log_level)
+    
+    logger.info("=" * 70)
+    logger.info("EV CHARGING OPTIMIZER - PRODUCTION PIPELINE")
+    logger.info("=" * 70)
+    logger.info(f"Config: {args.config}")
+    logger.info(f"Mode: {args.mode}")
+    logger.info("=" * 70)
+    
+    try:
+        # Execute pipeline based on mode
+        if args.mode in ['full', 'data']:
+            df_clean = run_data_pipeline(config)
+            
+            if args.mode == 'data':
+                logger.info("\n✓ Data pipeline complete")
+                return
+        else:
+            # Load existing processed data
+            df_clean = pd.read_csv(config.get('data.processed_path'))
+            df_clean['timestamp'] = pd.to_datetime(df_clean['timestamp'])
+        
+        if args.mode in ['full', 'features']:
+            df_features = run_feature_engineering(df_clean, config)
+            
+            if args.mode == 'features':
+                logger.info("\n✓ Feature engineering complete")
+                return
+        else:
+            # Load existing features
+            df_features = pd.read_csv(config.get('data.processed_path'))
+            df_features['timestamp'] = pd.to_datetime(df_features['timestamp'])
+        
+        if args.mode in ['full', 'train']:
+            model_results = run_model_training(df_features, config)
+            
+            if args.mode == 'train':
+                logger.info("\n✓ Model training complete")
+                return
+        else:
+            # Load existing model
+            from src.models.lgbm_forecaster import LightGBMForecaster
+            model_path = Path(config.get('paths.models')) / 'lightgbm_model.pkl'
+            best_model = LightGBMForecaster.load(str(model_path))
+            
+            # Need test data for optimization
+            df_features = pd.read_csv(config.get('data.processed_path'))
+            target_col = 'price_eur_mwh'
+            feature_cols = [c for c in df_features.columns if c not in [target_col, 'timestamp']]
+            
+            split1 = int(len(df_features) * config.get('split.train_ratio'))
+            split2 = int(len(df_features) * (config.get('split.train_ratio') + config.get('split.val_ratio')))
+            
+            X_test = df_features[feature_cols].iloc[split2:]
+            y_test = df_features[target_col].iloc[split2:]
+            
+            model_results = {
+                'best_model': best_model,
+                'test_data': {'X': X_test, 'y': y_test}
+            }
+        
+        if args.mode in ['full', 'optimize']:
+            optimization_results = run_optimization(
+                model_results['best_model'],
+                model_results['test_data'],
+                config
+            )
+        
+        logger.info("\n" + "=" * 70)
+        logger.info("✓✓✓ PIPELINE COMPLETE ✓✓✓")
+        logger.info("=" * 70)
+        
+        if args.mode == 'full':
+            logger.info("\nGenerated Outputs:")
+            logger.info(f"  - Feature data: {config.get('data.processed_path')}")
+            logger.info(f"  - Models: {config.get('paths.models')}/")
+            logger.info(f"  - Optimization schedule: {config.get('paths.data_processed')}/optimized_schedule.csv")
+            logger.info(f"  - Logs: {config.get('paths.logs')}/ev_optimizer.log")
+        
+    except Exception as e:
+        logger.error(f"Pipeline failed: {str(e)}")
+        logger.exception(e)
+        sys.exit(1)
+
+
+if __name__ == '__main__':
+    main()
